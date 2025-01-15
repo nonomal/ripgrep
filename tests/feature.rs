@@ -356,6 +356,17 @@ rgtest!(f263_sort_files, |dir: Dir, mut cmd: TestCommand| {
     eqnice!(expected, cmd.arg("--sort-files").arg("test").stdout());
 });
 
+// See: https://github.com/BurntSushi/ripgrep/issues/263
+rgtest!(f263_sort_files_reverse, |dir: Dir, mut cmd: TestCommand| {
+    dir.create("foo", "test");
+    dir.create("abc", "test");
+    dir.create("zoo", "test");
+    dir.create("bar", "test");
+
+    let expected = "zoo:test\nfoo:test\nbar:test\nabc:test\n";
+    eqnice!(expected, cmd.arg("--sortr=path").arg("test").stdout());
+});
+
 // See: https://github.com/BurntSushi/ripgrep/issues/275
 rgtest!(f275_pathsep, |dir: Dir, mut cmd: TestCommand| {
     dir.create_dir("foo");
@@ -411,7 +422,8 @@ rgtest!(
     |dir: Dir, mut cmd: TestCommand| {
         dir.create("sherlock", SHERLOCK);
 
-        let lines = cmd.arg("--stats").arg("Sherlock").stdout();
+        let lines = cmd.arg("-j1").arg("--stats").arg("Sherlock").stdout();
+        assert!(lines.contains("Sherlock"));
         assert!(lines.contains("2 matched lines"));
         assert!(lines.contains("1 files contained matches"));
         assert!(lines.contains("1 files searched"));
@@ -423,7 +435,39 @@ rgtest!(f411_parallel_search_stats, |dir: Dir, mut cmd: TestCommand| {
     dir.create("sherlock_1", SHERLOCK);
     dir.create("sherlock_2", SHERLOCK);
 
-    let lines = cmd.arg("--stats").arg("Sherlock").stdout();
+    let lines = cmd.arg("-j2").arg("--stats").arg("Sherlock").stdout();
+    assert!(lines.contains("4 matched lines"));
+    assert!(lines.contains("2 files contained matches"));
+    assert!(lines.contains("2 files searched"));
+    assert!(lines.contains("seconds"));
+});
+
+rgtest!(
+    f411_single_threaded_quiet_search_stats,
+    |dir: Dir, mut cmd: TestCommand| {
+        dir.create("sherlock", SHERLOCK);
+
+        let lines = cmd
+            .arg("--quiet")
+            .arg("-j1")
+            .arg("--stats")
+            .arg("Sherlock")
+            .stdout();
+        assert!(!lines.contains("Sherlock"));
+        assert!(lines.contains("2 matched lines"));
+        assert!(lines.contains("1 files contained matches"));
+        assert!(lines.contains("1 files searched"));
+        assert!(lines.contains("seconds"));
+    }
+);
+
+rgtest!(f411_parallel_quiet_search_stats, |dir: Dir, mut cmd: TestCommand| {
+    dir.create("sherlock_1", SHERLOCK);
+    dir.create("sherlock_2", SHERLOCK);
+
+    let lines =
+        cmd.arg("-j2").arg("--quiet").arg("--stats").arg("Sherlock").stdout();
+    assert!(!lines.contains("Sherlock"));
     assert!(lines.contains("4 matched lines"));
     assert!(lines.contains("2 files contained matches"));
     assert!(lines.contains("2 files searched"));
@@ -623,6 +667,110 @@ but Doctor Watson has to have it taken out for him and dusted,
     eqnice!(expected, cmd.stdout());
 });
 
+rgtest!(f917_trim_multi_standard, |dir: Dir, mut cmd: TestCommand| {
+    const HAYSTACK: &str = "     0123456789abcdefghijklmnopqrstuvwxyz";
+    dir.create("haystack", HAYSTACK);
+    cmd.args(&["--multiline", "--trim", "-r$0", "--no-filename", r"a\n?bc"]);
+
+    let expected = "0123456789abcdefghijklmnopqrstuvwxyz\n";
+    eqnice!(expected, cmd.stdout());
+});
+
+rgtest!(f917_trim_max_columns_normal, |dir: Dir, mut cmd: TestCommand| {
+    const HAYSTACK: &str = "     0123456789abcdefghijklmnopqrstuvwxyz";
+    dir.create("haystack", HAYSTACK);
+    cmd.args(&[
+        "--trim",
+        "--max-columns-preview",
+        "-M8",
+        "--no-filename",
+        "abc",
+    ]);
+
+    let expected = "01234567 [... omitted end of long line]\n";
+    eqnice!(expected, cmd.stdout());
+});
+
+rgtest!(f917_trim_max_columns_matches, |dir: Dir, mut cmd: TestCommand| {
+    const HAYSTACK: &str = "     0123456789abcdefghijklmnopqrstuvwxyz";
+    dir.create("haystack", HAYSTACK);
+    cmd.args(&[
+        "--trim",
+        "--max-columns-preview",
+        "-M8",
+        "--color=always",
+        "--colors=path:none",
+        "--no-filename",
+        "abc",
+    ]);
+
+    let expected = "01234567 [... 1 more match]\n";
+    eqnice!(expected, cmd.stdout());
+});
+
+rgtest!(
+    f917_trim_max_columns_multi_standard,
+    |dir: Dir, mut cmd: TestCommand| {
+        const HAYSTACK: &str = "     0123456789abcdefghijklmnopqrstuvwxyz";
+        dir.create("haystack", HAYSTACK);
+        cmd.args(&[
+            "--multiline",
+            "--trim",
+            "--max-columns-preview",
+            "-M8",
+            // Force the "slow" printing path without actually
+            // putting colors in the output.
+            "--color=always",
+            "--colors=path:none",
+            "--no-filename",
+            r"a\n?bc",
+        ]);
+
+        let expected = "01234567 [... 1 more match]\n";
+        eqnice!(expected, cmd.stdout());
+    }
+);
+
+rgtest!(
+    f917_trim_max_columns_multi_only_matching,
+    |dir: Dir, mut cmd: TestCommand| {
+        const HAYSTACK: &str = "     0123456789abcdefghijklmnopqrstuvwxyz";
+        dir.create("haystack", HAYSTACK);
+        cmd.args(&[
+            "--multiline",
+            "--trim",
+            "--max-columns-preview",
+            "-M8",
+            "--only-matching",
+            "--no-filename",
+            r".*a\n?bc.*",
+        ]);
+
+        let expected = "01234567 [... 0 more matches]\n";
+        eqnice!(expected, cmd.stdout());
+    }
+);
+
+rgtest!(
+    f917_trim_max_columns_multi_per_match,
+    |dir: Dir, mut cmd: TestCommand| {
+        const HAYSTACK: &str = "     0123456789abcdefghijklmnopqrstuvwxyz";
+        dir.create("haystack", HAYSTACK);
+        cmd.args(&[
+            "--multiline",
+            "--trim",
+            "--max-columns-preview",
+            "-M8",
+            "--vimgrep",
+            "--no-filename",
+            r".*a\n?bc.*",
+        ]);
+
+        let expected = "1:1:01234567 [... 0 more matches]\n";
+        eqnice!(expected, cmd.stdout());
+    }
+);
+
 // See: https://github.com/BurntSushi/ripgrep/issues/993
 rgtest!(f993_null_data, |dir: Dir, mut cmd: TestCommand| {
     dir.create("test", "foo\x00bar\x00\x00\x00baz\x00");
@@ -791,6 +939,9 @@ rgtest!(f1466_no_ignore_files, |dir: Dir, mut cmd: TestCommand| {
 rgtest!(f2361_sort_nested_files, |dir: Dir, mut cmd: TestCommand| {
     use std::{thread::sleep, time::Duration};
 
+    if crate::util::is_cross() {
+        return;
+    }
     dir.create("foo", "1");
     sleep(Duration::from_millis(100));
     dir.create_dir("dir");
@@ -821,10 +972,10 @@ rgtest!(f1404_nothing_searched_warning, |dir: Dir, mut cmd: TestCommand| {
     cmd.assert_err();
 
     // Test that we actually get an error message that we expect.
-    let output = cmd.cmd().output().unwrap();
+    let output = cmd.raw_output();
     let stderr = String::from_utf8_lossy(&output.stderr);
     let expected = "\
-        No files were searched, which means ripgrep probably applied \
+        rg: No files were searched, which means ripgrep probably applied \
         a filter you didn't expect.\n\
         Running with --debug will show why files are being skipped.\n\
     ";
@@ -844,7 +995,7 @@ rgtest!(f1404_nothing_searched_ignored, |dir: Dir, mut cmd: TestCommand| {
 
     // But since --no-messages is given, there should not be any error message
     // printed.
-    let output = cmd.cmd().output().unwrap();
+    let output = cmd.raw_output();
     let stderr = String::from_utf8_lossy(&output.stderr);
     let expected = "";
     eqnice!(expected, stderr);

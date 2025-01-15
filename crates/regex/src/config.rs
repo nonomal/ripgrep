@@ -3,12 +3,12 @@ use {
     regex_automata::meta::Regex,
     regex_syntax::{
         ast,
-        hir::{self, Hir, HirKind},
+        hir::{self, Hir},
     },
 };
 
 use crate::{
-    ast::AstAnalysis, error::Error, non_matching::non_matching_bytes,
+    ast::AstAnalysis, ban, error::Error, non_matching::non_matching_bytes,
     strip::strip_from_match,
 };
 
@@ -35,6 +35,7 @@ pub(crate) struct Config {
     pub(crate) dfa_size_limit: usize,
     pub(crate) nest_limit: u32,
     pub(crate) line_terminator: Option<LineTerminator>,
+    pub(crate) ban: Option<u8>,
     pub(crate) crlf: bool,
     pub(crate) word: bool,
     pub(crate) fixed_strings: bool,
@@ -58,6 +59,7 @@ impl Default for Config {
             dfa_size_limit: 1000 * (1 << 20),
             nest_limit: 250,
             line_terminator: None,
+            ban: None,
             crlf: false,
             word: false,
             fixed_strings: false,
@@ -205,6 +207,9 @@ impl ConfiguredHIR {
                 .build()
                 .translate(&pattern, &ast)
                 .map_err(Error::generic)?;
+            if let Some(byte) = config.ban {
+                ban::check(&hir, byte)?;
+            }
             // We don't need to do this for the fixed-strings case above
             // because is_fixed_strings will return false if any pattern
             // contains a line terminator. Therefore, we don't need to strip
@@ -228,7 +233,7 @@ impl ConfiguredHIR {
         &self.config
     }
 
-    /// Return a reference to the underyling HIR.
+    /// Return a reference to the underlying HIR.
     pub(crate) fn hir(&self) -> &Hir {
         &self.hir
     }
@@ -296,35 +301,6 @@ impl ConfiguredHIR {
         }
     }
 
-    /// Turns this configured HIR into one that only matches when both sides of
-    /// the match correspond to a word boundary.
-    ///
-    /// Note that the HIR returned is like turning `pat` into
-    /// `(?m:^|\W)(pat)(?m:$|\W)`. That is, the true match is at capture group
-    /// `1` and not `0`.
-    pub(crate) fn into_word(self) -> Result<ConfiguredHIR, Error> {
-        // In theory building the HIR for \W should never fail, but there are
-        // likely some pathological cases (particularly with respect to certain
-        // values of limits) where it could in theory fail.
-        let non_word = {
-            let mut config = self.config.clone();
-            config.fixed_strings = false;
-            ConfiguredHIR::new(config, &[r"\W"])?
-        };
-        let line_anchor_start = Hir::look(self.line_anchor_start());
-        let line_anchor_end = Hir::look(self.line_anchor_end());
-        let hir = Hir::concat(vec![
-            Hir::alternation(vec![line_anchor_start, non_word.hir.clone()]),
-            Hir::capture(hir::Capture {
-                index: 1,
-                name: None,
-                sub: Box::new(renumber_capture_indices(self.hir)?),
-            }),
-            Hir::alternation(vec![non_word.hir, line_anchor_end]),
-        ]);
-        Ok(ConfiguredHIR { config: self.config, hir })
-    }
-
     /// Turns this configured HIR into an equivalent one, but where it must
     /// match at the start and end of a line.
     pub(crate) fn into_whole_line(self) -> ConfiguredHIR {
@@ -336,12 +312,20 @@ impl ConfiguredHIR {
     }
 
     /// Turns this configured HIR into an equivalent one, but where it must
-    /// match at the start and end of the haystack.
-    pub(crate) fn into_anchored(self) -> ConfiguredHIR {
+    /// match at word boundaries.
+    pub(crate) fn into_word(self) -> ConfiguredHIR {
         let hir = Hir::concat(vec![
-            Hir::look(hir::Look::Start),
+            Hir::look(if self.config.unicode {
+                hir::Look::WordStartHalfUnicode
+            } else {
+                hir::Look::WordStartHalfAscii
+            }),
             self.hir,
-            Hir::look(hir::Look::End),
+            Hir::look(if self.config.unicode {
+                hir::Look::WordEndHalfUnicode
+            } else {
+                hir::Look::WordEndHalfAscii
+            }),
         ]);
         ConfiguredHIR { config: self.config, hir }
     }
@@ -363,50 +347,6 @@ impl ConfiguredHIR {
             hir::Look::EndLF
         }
     }
-}
-
-/// This increments the index of every capture group in the given hir by 1. If
-/// any increment results in an overflow, then an error is returned.
-fn renumber_capture_indices(hir: Hir) -> Result<Hir, Error> {
-    Ok(match hir.into_kind() {
-        HirKind::Empty => Hir::empty(),
-        HirKind::Literal(hir::Literal(lit)) => Hir::literal(lit),
-        HirKind::Class(cls) => Hir::class(cls),
-        HirKind::Look(x) => Hir::look(x),
-        HirKind::Repetition(mut x) => {
-            x.sub = Box::new(renumber_capture_indices(*x.sub)?);
-            Hir::repetition(x)
-        }
-        HirKind::Capture(mut cap) => {
-            cap.index = match cap.index.checked_add(1) {
-                Some(index) => index,
-                None => {
-                    // This error message kind of sucks, but it's probably
-                    // impossible for it to happen. The only way a capture
-                    // index can overflow addition is if the regex is huge
-                    // (or something else has gone horribly wrong).
-                    let msg = "could not renumber capture index, too big";
-                    return Err(Error::any(msg));
-                }
-            };
-            cap.sub = Box::new(renumber_capture_indices(*cap.sub)?);
-            Hir::capture(cap)
-        }
-        HirKind::Concat(subs) => {
-            let subs = subs
-                .into_iter()
-                .map(|sub| renumber_capture_indices(sub))
-                .collect::<Result<Vec<Hir>, Error>>()?;
-            Hir::concat(subs)
-        }
-        HirKind::Alternation(subs) => {
-            let subs = subs
-                .into_iter()
-                .map(|sub| renumber_capture_indices(sub))
-                .collect::<Result<Vec<Hir>, Error>>()?;
-            Hir::alternation(subs)
-        }
-    })
 }
 
 /// Returns true if the given literal string contains any byte from the line

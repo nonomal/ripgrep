@@ -15,7 +15,7 @@ use crate::{config::ConfiguredHIR, error::Error};
 /// that are in turn used to build a simpler regex that is more amenable to
 /// optimization.
 ///
-/// The main idea underyling the validity of this technique is the fact
+/// The main idea underlying the validity of this technique is the fact
 /// that ripgrep searches individuals lines and not across lines. (Unless
 /// -U/--multiline is enabled.) Namely, we can pluck literals out of the regex,
 /// search for them, find the bounds of the line in which that literal occurs
@@ -65,12 +65,19 @@ impl InnerLiterals {
         // If we believe the regex is already accelerated, then just let
         // the regex engine do its thing. We'll skip the inner literal
         // optimization.
+        //
+        // ... but only if the regex doesn't have any Unicode word boundaries.
+        // If it does, there's enough of a chance of the regex engine falling
+        // back to a slower engine that it's worth trying our own inner literal
+        // optimization.
         if re.is_accelerated() {
-            log::trace!(
-                "skipping inner literal extraction, \
-                 existing regex is believed to already be accelerated",
-            );
-            return InnerLiterals::none();
+            if !chir.hir().properties().look_set().contains_word_unicode() {
+                log::trace!(
+                    "skipping inner literal extraction, \
+                     existing regex is believed to already be accelerated",
+                );
+                return InnerLiterals::none();
+            }
         }
         // In this case, we pretty much know that the regex engine will handle
         // it as best as possible, even if it isn't reported as accelerated.
@@ -423,6 +430,7 @@ impl Extractor {
         }
         seq1.union(seq2);
         assert!(seq1.len().map_or(true, |x| x <= self.limit_total));
+        seq1.prefix = seq1.prefix && seq2.prefix;
         seq1
     }
 
@@ -579,10 +587,15 @@ impl TSeq {
         lits.iter().any(is_poisonous)
     }
 
-    /// Compare the two sequences and return the one that is believed to be best
-    /// according to a hodge podge of heuristics.
+    /// Compare the two sequences and return the one that is believed to be
+    /// best according to a hodge podge of heuristics.
     fn choose(self, other: TSeq) -> TSeq {
-        let (seq1, seq2) = (self, other);
+        let (mut seq1, mut seq2) = (self, other);
+        // Whichever one we pick, by virtue of picking one, we choose
+        // to not take the other. So we must consider the result inexact.
+        seq1.make_inexact();
+        seq2.make_inexact();
+
         if !seq1.is_finite() {
             return seq2;
         } else if !seq2.is_finite() {
@@ -674,7 +687,7 @@ mod tests {
         assert_eq!(e(r"foo"), seq([E("foo")]));
         assert_eq!(e(r"[a-z]foo[a-z]"), seq([I("foo")]));
         assert_eq!(e(r"[a-z](foo)(bar)[a-z]"), seq([I("foobar")]));
-        assert_eq!(e(r"[a-z]([a-z]foo)(bar[a-z])[a-z]"), seq([I("foobar")]));
+        assert_eq!(e(r"[a-z]([a-z]foo)(bar[a-z])[a-z]"), seq([I("foo")]));
         assert_eq!(e(r"[a-z]([a-z]foo)([a-z]foo)[a-z]"), seq([I("foo")]));
         assert_eq!(e(r"(\d{1,3}\.){3}\d{1,3}"), seq([I(".")]));
         assert_eq!(e(r"[a-z]([a-z]foo){3}[a-z]"), seq([I("foo")]));
@@ -682,7 +695,7 @@ mod tests {
         assert_eq!(e(r"[a-z]([a-z]foo[a-z]){3}[a-z]"), seq([I("foo")]));
         assert_eq!(
             e(r"[a-z]([a-z]foo){3}(bar[a-z]){3}[a-z]"),
-            seq([I("foobar")])
+            seq([I("foo")])
         );
     }
 
@@ -928,14 +941,14 @@ mod tests {
         assert_eq!(Seq::infinite(), e(r"[A-Z]+"));
         assert_eq!(seq([I("1")]), e(r"1[A-Z]"));
         assert_eq!(seq([I("1")]), e(r"1[A-Z]2"));
-        assert_eq!(seq([E("123")]), e(r"[A-Z]+123"));
+        assert_eq!(seq([I("123")]), e(r"[A-Z]+123"));
         assert_eq!(seq([I("123")]), e(r"[A-Z]+123[A-Z]+"));
         assert_eq!(Seq::infinite(), e(r"1|[A-Z]|3"));
         assert_eq!(seq([E("1"), I("2"), E("3")]), e(r"1|2[A-Z]|3"),);
         assert_eq!(seq([E("1"), I("2"), E("3")]), e(r"1|[A-Z]2[A-Z]|3"),);
-        assert_eq!(seq([E("1"), E("2"), E("3")]), e(r"1|[A-Z]2|3"),);
+        assert_eq!(seq([E("1"), I("2"), E("3")]), e(r"1|[A-Z]2|3"),);
         assert_eq!(seq([E("1"), I("2"), E("4")]), e(r"1|2[A-Z]3|4"),);
-        assert_eq!(seq([E("2")]), e(r"(?:|1)[A-Z]2"));
+        assert_eq!(seq([I("2")]), e(r"(?:|1)[A-Z]2"));
         assert_eq!(inexact([I("a")]), e(r"a.z"));
     }
 
@@ -997,5 +1010,12 @@ mod tests {
         // used without needing the regex engine at all.)
         let s = e(r"foobarfoo|foo| |foofoo");
         assert_eq!(Seq::infinite(), s);
+    }
+
+    // Regression test for: https://github.com/BurntSushi/ripgrep/issues/2884
+    #[test]
+    fn case_insensitive_alternation() {
+        let s = e(r"(?i:e.x|ex)");
+        assert_eq!(s, seq([I("X"), I("x")]));
     }
 }
