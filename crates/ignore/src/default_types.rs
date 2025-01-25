@@ -9,7 +9,7 @@
 /// Please try to keep this list sorted lexicographically and wrapped to 79
 /// columns (inclusive).
 #[rustfmt::skip]
-pub const DEFAULT_TYPES: &[(&[&str], &[&str])] = &[
+pub(crate) const DEFAULT_TYPES: &[(&[&str], &[&str])] = &[
     (&["ada"], &["*.adb", "*.ads"]),
     (&["agda"], &["*.agda", "*.lagda"]),
     (&["aidl"], &["*.aidl"]),
@@ -112,12 +112,13 @@ pub const DEFAULT_TYPES: &[(&[&str], &[&str])] = &[
     (&["jinja"], &["*.j2", "*.jinja", "*.jinja2"]),
     (&["jl"], &["*.jl"]),
     (&["js"], &["*.js", "*.jsx", "*.vue", "*.cjs", "*.mjs"]),
-    (&["json"], &["*.json", "composer.lock"]),
+    (&["json"], &["*.json", "composer.lock", "*.sarif"]),
     (&["jsonl"], &["*.jsonl"]),
     (&["julia"], &["*.jl"]),
     (&["jupyter"], &["*.ipynb", "*.jpynb"]),
     (&["k"], &["*.k"]),
     (&["kotlin"], &["*.kt", "*.kts"]),
+    (&["lean"], &["*.lean"]),
     (&["less"], &["*.less"]),
     (&["license"], &[
         // General
@@ -172,7 +173,7 @@ pub const DEFAULT_TYPES: &[(&[&str], &[&str])] = &[
         "*.mdx",
     ]),
     (&["matlab"], &["*.m"]),
-    (&["meson"], &["meson.build", "meson_options.txt"]),
+    (&["meson"], &["meson.build", "meson_options.txt", "meson.options"]),
     (&["minified"], &["*.min.html", "*.min.css", "*.min.js"]),
     (&["mint"], &["*.mint"]),
     (&["mk"], &["mkfile"]),
@@ -264,6 +265,7 @@ pub const DEFAULT_TYPES: &[(&[&str], &[&str])] = &[
     (&["sql"], &["*.sql", "*.psql"]),
     (&["stylus"], &["*.styl"]),
     (&["sv"], &["*.v", "*.vg", "*.sv", "*.svh", "*.h"]),
+    (&["svelte"], &["*.svelte"]),
     (&["svg"], &["*.svg"]),
     (&["swift"], &["*.swift"]),
     (&["swig"], &["*.def", "*.i"]),
@@ -289,7 +291,7 @@ pub const DEFAULT_TYPES: &[(&[&str], &[&str])] = &[
     (&["txt"], &["*.txt"]),
     (&["typoscript"], &["*.typoscript", "*.ts"]),
     (&["usd"], &["*.usd", "*.usda", "*.usdc"]),
-    (&["v"], &["*.v"]),
+    (&["v"], &["*.v", "*.vsh"]),
     (&["vala"], &["*.vala"]),
     (&["vb"], &["*.vb"]),
     (&["vcl"], &["*.vcl"]),
@@ -301,7 +303,9 @@ pub const DEFAULT_TYPES: &[(&[&str], &[&str])] = &[
     (&["vimscript"], &[
         "*.vim", ".vimrc", ".gvimrc", "vimrc", "gvimrc", "_vimrc", "_gvimrc",
     ]),
+    (&["vue"], &["*.vue"]),
     (&["webidl"], &["*.idl", "*.webidl", "*.widl"]),
+    (&["wgsl"], &["*.wgsl"]),
     (&["wiki"], &["*.mediawiki", "*.wiki"]),
     (&["xml"], &[
         "*.xml", "*.xml.dist", "*.dtd", "*.xsl", "*.xslt", "*.xsd", "*.xjb",
@@ -331,7 +335,9 @@ mod tests {
     #[test]
     fn default_types_are_sorted() {
         let mut names = DEFAULT_TYPES.iter().map(|(aliases, _)| aliases[0]);
-        let Some(mut previous_name) = names.next() else { return; };
+        let Some(mut previous_name) = names.next() else {
+            return;
+        };
         for name in names {
             assert!(
                 name > previous_name,

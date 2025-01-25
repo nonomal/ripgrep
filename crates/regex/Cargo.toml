@@ -1,6 +1,6 @@
 [package]
 name = "grep-regex"
-version = "0.1.11"  #:version
+version = "0.1.13"  #:version
 authors = ["Andrew Gallant <jamslam@gmail.com>"]
 description = """
 Use Rust's regex library with the 'grep' crate.
@@ -14,9 +14,8 @@ license = "Unlicense OR MIT"
 edition = "2021"
 
 [dependencies]
-aho-corasick = "1.0.2"
-bstr = "1.6.0"
-grep-matcher = { version = "0.1.6", path = "../matcher" }
-log = "0.4.19"
-regex-automata = { version = "0.3.0" }
-regex-syntax = "0.7.2"
+bstr = "1.6.2"
+grep-matcher = { version = "0.1.7", path = "../matcher" }
+log = "0.4.20"
+regex-automata = { version = "0.4.0" }
+regex-syntax = "0.8.0"
